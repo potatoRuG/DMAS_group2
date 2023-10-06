@@ -9,7 +9,7 @@ The NetLogo program is required for running the simulation model used in this pr
 The interface uses three main settings that can be adjusted:
 - *number-of-people*: The number of agents being part of the simulation.
 - *number-of-groups*: The number of neighborhoods the agents are divided between in the simulation.
-- *ethnicity*: can be either *American* (with a high mobility rate of 0.8) or *Japanese* (with a low mobility rate of 0.3). In the boxed view of the model, Americans are colored red, while Japanese are colored blue.
+- *ethnicity*: can be either *American* (with a high mobility rate of 0.8) or *Japanese* (with a low mobility rate of 0.3).
 
 ### Setting up the model
 After pressing the *setup* button, the model will prepare itself to start the simulation. The following can be stated about the boxed view on the right, which shows the current model structure:
