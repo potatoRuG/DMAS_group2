@@ -1,6 +1,6 @@
 # Investigating the Conformist Theory for Group Behavior of American and Japanese People in an Agent-Based Model
 
-A project for the RUG course *Design of Multi-Agent Systems* by Aylar Ziad Alizadeh, Lauren Kersten, Tom Veldhuis and Twan Vos. The model used in this project was built in NetLogo (using the *Party* model from the Models Library of the NetLogo program as a basis) to simulate interactions between agents that move between neighborhoods and a global market. 
+A project for the RUG course *Design of Multi-Agent Systems* by Aylar Ziad Alizadeh, Lauren Kersten, Tom Veldhuis and Twan Vos (Group 2). The model used in this project was built in NetLogo (using the *Party* model from the Models Library of the NetLogo program as a basis) to simulate interactions between agents that move between neighborhoods and a global market. 
 
 ## Usage
 The NetLogo program is required for running the simulation model used in this project. Open the *base_model.nlogo* file to show the simulation model.
