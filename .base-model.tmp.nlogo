@@ -195,13 +195,6 @@ to determine-go-to-market
     set last-market-action market-action
   ]
 
-  ;; Check for 50% chance of using the same decision as the role model
-  ;; (agent in the neighborhood with highest cumulative payoff)
-  let role-model max-one-of turtles-here [payoff]
-  if who != [who] of role-model and (random-float 1.0) >= 0.5 [
-    set market-action [last-market-action] of role-model
-    set last-market-action [last-market-action] of role-model
-  ]
 
   ;; If the agent wants to go to the market, go to the market
   if market-action = "market" [
