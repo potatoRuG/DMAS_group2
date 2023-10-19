@@ -15,6 +15,9 @@ globals [
   number-interactions     ;; total number of interactions
   interactions-exit       ;; number of interactions that were exited
   interactions-full-coop  ;; number of interactions in which there was full cooperation
+
+  cooperating-turtles ; list of cooperating turtles
+  defecting-turtles   ; list of defecting turtles
 ]
 
 turtles-own [
@@ -31,6 +34,7 @@ turtles-own [
 
   payoff             ;; how much payoff agent has
   encountered-agents ;; list of agents that the agent has encountered so far
+  trustworthiness    ;; how trustworthy is an agent
 ]
 
 to setup
@@ -59,6 +63,8 @@ to setup
     set play-prob random-float 1.0
     set strategy-prob random-float 1.0
     set market-prob random-float 1.0
+
+    set trustworthiness random-float 1.0 ;; not sure if both ethnicities should have the same amount or not
     ;; -------------------------
 
     ;; assign each agent to a group
@@ -85,12 +91,17 @@ to setup
   set interactions-exit 0
   set interactions-full-coop 0
 
+  ;; lists for keeping track of which turtles coop & defect
+  set cooperating-turtles []
+  set defecting-turtles []
+
   ;; count amount of agents in one group
   update-labels
   ask turtles [
     spread-out-vertically
     spread-out-market
   ]
+
   reset-ticks
 end
 
@@ -103,6 +114,7 @@ to go
   ask turtles [reset-color]
   ;; let all agent move to their sites
   ask turtles [ move-to my-neighborhood ]
+
   ;; decide what to do: stay in same group or move to another
   decide-action
   ;; count amount of agents in one group
@@ -146,17 +158,27 @@ to decide-action
   clear-links
 end
 
+
 ;; agent should change neighborhood it's currently in
 to change-neighborhood
   display
   move-to one-of neighborhoods
   set newcomer? true
+
+  ;; reduce trustworthiness for moving to new neighborhood
+  set trustworthiness max list 0 trustworthiness - 0.5      ;; this value can be changed
+
   if patch-here != my-neighborhood and patch-here != market [ stop ]
   change-neighborhood
 end
 
-;; if agent stays in same neighborhood, try to partner up
+
+;; if agent stays in same neighborhood, try to partner up and increase trustworthiness
 to stay-in-neighborhood
+
+  ;; increase trustworthiness when staying in neighborhood
+  set trustworthiness min list 1 trustworthiness + 0.05  ;; this value can be changed
+
   ;; pick a potential partner
   let potential-partner one-of other turtles-here
   ;; check whether there are partners left
@@ -168,6 +190,7 @@ to stay-in-neighborhood
     interact-with-partner
   ]
 end
+
 
 ;; agent interacts with its partner
 to interact-with-partner
@@ -184,12 +207,23 @@ to interact-with-partner
       set encountered-agents remove-duplicates encountered-agents
       ask partner [ set encountered-agents remove-duplicates encountered-agents ]
 
-      ;; determine whether the agent and its partner play or exit the prisoner's dilemma
-      determine-play-or-exit partner
-      ;; determine which strategy the agent and its partner use for the prisoner's dilemma
-      determine-strategy partner
+
+      ifelse (model = "macy + sato") [
+        ;; determine whether the agent and its partner play or exit the prisoner's dilemma
+        determine-play-or-exit partner
+        ;; determine which strategy the agent and its partner use for the prisoner's dilemma
+        determine-strategy-ms partner
+      ] [
+        ;; determine whether the agent and its partner play or exit the prisoner's dilemma
+        determine-play-or-exit partner
+        ;; determine which strategy the agent and its partner use for the prisoner's dilemma
+        determine-strategy-hb partner
+        ;; punish non-cooperators
+        punishment-stage
+      ]
     ]
 end
+
 
 to determine-go-to-market
   ;; ---- LOCATION: STAY OR GO TO MARKET ----
@@ -212,6 +246,7 @@ to determine-go-to-market
     set newcomer? true
   ]
 end
+
 
 to determine-play-or-exit [ partner ]
   ;; ------ TRUST: PLAY OR EXIT -------
@@ -250,6 +285,20 @@ to determine-play-or-exit [ partner ]
     ask partner [ set last-play-action "exit" ]
   ]
 
+  ;; ----------- Initial Trustworthiness Implementation -------------
+  ;; If someone is deemed not trustworthy enough, interaction is exited
+  ;; American accept less trustworthy
+  ;; not sure if 1 - mobility-rate is good or should be changed
+  if [ trustworthiness ] of partner >= 1 - mobility-rate [
+    set play-action "exit"
+    set last-play-action "exit"
+  ]
+
+  if trustworthiness >= 1 - [ mobility-rate ] of partner [
+    set play-action "exit"
+    set last-play-action "exit"
+  ]
+
   ;; Stop interacting if either the agent, its partner or both want to exit
   if play-action = "exit" or play-action-partner = "exit" [
     set interactions-exit interactions-exit + 1
@@ -267,7 +316,10 @@ to determine-play-or-exit [ partner ]
   ]
 end
 
-to determine-strategy [ partner ]
+
+;; ---------- Macy & Sato -------------
+
+to determine-strategy-ms [ partner ]
   ;; ---- TRUSTWORTHINESS: COOPERATE OR DEFECT ----
   ;; Check whether the agent wants to repeat its last coop action
   let strategy ""
@@ -305,6 +357,91 @@ to determine-strategy [ partner ]
   set payoff (payoff + my-payoff)
   ask partner [ set payoff (payoff + partner-payoff) ]
 end
+
+
+;; ---------- Henrich & Boyd -------------
+
+to determine-strategy-hb [ partner ]
+  ;; ---- TRUSTWORTHINESS: COOPERATE OR DEFECT ----
+  ;; Check whether the agent wants to repeat its last coop action
+  let strategy ""
+  ifelse (random-float 1.0) < strategy-prob [
+    ;; Yes -> repeat last coop action
+    set strategy last-strategy
+  ] [
+    ;; No -> choose the other coop action
+    if last-strategy = "cooperate" [ set strategy "defect" ]
+    if last-strategy = "defect" [ set strategy "cooperate" ]
+    set last-strategy strategy
+  ]
+
+  ;; Check whether the partner wants to repeat its last play action
+  let partner-strategy ""
+  ifelse (random-float 1.0) < [strategy-prob] of partner [
+    ;; Yes -> repeat last play action
+    set partner-strategy [last-strategy] of partner
+  ] [
+    ;; No -> choose the other play action
+    if [last-strategy] of partner = "cooperate" [ set partner-strategy "defect" ]
+    if [last-strategy] of partner = "defect" [ set partner-strategy "cooperate" ]
+    ask partner [ set last-strategy partner-strategy ]
+  ]
+
+  ;; calculate the payoffs based on the strategies of the agent and its partner
+  let my-payoff calculate-payoff strategy partner-strategy
+  let partner-payoff calculate-payoff partner-strategy strategy
+
+  ;; keep track of which turtles coop or defect
+   strategy
+  ask partner [ update-lists partner-strategy ]
+
+  ;; update coop probabilities
+  update-coop-prob my-payoff
+  ask partner [ update-coop-prob partner-payoff ]
+
+  ;; update payoffs of agents
+  set payoff (payoff + my-payoff)
+  ask partner [ set payoff (payoff + partner-payoff) ]
+end
+
+
+to update-lists-and-trustworthiness [ strategy ]
+  if strategy = "cooperate" [
+    set cooperating-turtles lput self cooperating-turtles
+    set trustworthiness trustworthiness + 0.2
+  ]
+  if strategy = "defect" [
+    set defecting-turtles lput self defecting-turtles
+    set trustworthiness trustworthiness - 0.2
+  ]
+end
+
+
+; for now all of the cooperating punish and is only 1 round
+to punishment-stage
+  foreach cooperating-turtles [
+    let my-neighbor my-neighborhood  ; stores current neighborhood
+
+    ; find defecting agents in the same neighborhood
+    let potential-punish-targets other turtles with [
+        my-neighborhood = my-neighbor and member? self defecting-turtles
+    ]
+
+    if any? potential-punish-targets [
+      ; selects an agent to punish
+      let punish-target one-of potential-punish-targets
+
+      ; update payoff of punished and punishing agents
+      ask punish-target [
+        update-payoff-punished
+      ]
+      update-payoff-punishing
+
+    ]
+  ]
+end
+
+
 
 to update-play-prob [ new-payoff ]
   ifelse new-payoff >= 0 [
@@ -355,6 +492,20 @@ end
 to update-payoffs [my-payoff]
   set payoff (payoff + my-payoff)
 end
+
+
+;------- payoff updates for punishments -----------
+
+;; update the agent's payoff value if punishing others
+to update-payoff-punishing
+  set payoff (payoff - 2)    ;; value can be changed - not sure what to have
+end
+
+;; update the agent's payoff value if punished
+to update-payoff-punished
+  set payoff (payoff - 5)    ;; value can be changed - not sure what to have
+end
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;; EXTRAS ;;;;;;;;;;;;
@@ -587,9 +738,9 @@ PENS
 
 MONITOR
 230
-250
+265
 322
-295
+310
 avg play prob
 mean [play-prob] of turtles
 5
@@ -598,9 +749,9 @@ mean [play-prob] of turtles
 
 MONITOR
 230
-315
+330
 327
-360
+375
 avg strat. prob
 mean [strategy-prob] of turtles
 5
@@ -609,9 +760,9 @@ mean [strategy-prob] of turtles
 
 MONITOR
 230
-385
+400
 337
-430
+445
 avg market prob
 mean [market-prob] of turtles
 5
@@ -620,9 +771,9 @@ mean [market-prob] of turtles
 
 MONITOR
 230
-140
+155
 332
-185
+200
 number of exits
 interactions-exit
 17
@@ -631,14 +782,24 @@ interactions-exit
 
 MONITOR
 215
-195
+210
 365
-236
+255
 nr. of full coop interactions
 interactions-full-coop
 17
 1
 11
+
+CHOOSER
+155
+90
+297
+135
+model
+model
+"macy + sato" "henrich + boyd"
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
