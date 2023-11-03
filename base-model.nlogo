@@ -3,13 +3,28 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 globals [
   neighborhoods       ;; Set of patches where groups are located
-  market              ;; Global market where agents can freely interact
 
+  ;; Macy/Sato model parameters
   payoff-exit         ;; payoff when there is no exchange
 
-  number-interactions     ;; total number of interactions
-  interactions-exit       ;; number of interactions that were exited
-  interactions-full-coop  ;; number of interactions in which there was full cooperation
+  ;; Henrich/Boyd model parameters
+  ;; Note: B > C and \phi < \rho < C
+  p0                  ;; frequency of P-variant at punishment stage 0
+  p1                  ;; frequency of P-variant at punishment stage 0
+  coop-cost           ;; cost of cooperation (C)
+  group-benefit       ;; benefit of group (B)
+  error-rate          ;; chance of P-variants mistakenly defecting or failing to punish (e)
+  punishee-cost       ;; cost of being punished (\rho)
+  punisher-cost       ;; cost of punishing (\phi)
+  alpha               ;; strength of conformist transmission
+
+  number-interactions              ;; total number of interactions
+  interactions-newcomer            ;; number of interactions which involved a newcomer
+  interactions-exit                ;; number of interactions that were exited
+  interactions-full-coop           ;; number of interactions in which there was full cooperation
+  interactions-full-coop-newcomer  ;; number of newcomer interactions in which there was full cooperation
+  avg-payoff
+  interactions-punish
 ]
 
 turtles-own [
@@ -17,14 +32,19 @@ turtles-own [
   newcomer?          ;; true or false
   my-neighborhood    ;; to which group agent belongs to
 
+  ;; Macy/Sato parameters
   last-play-action   ;; last play action (play or exit)
   play-prob          ;; probability of repeating last play action
   last-strategy      ;; last strategy (cooperate or defect)
   strategy-prob      ;; probability of repeating last strategy
-  last-market-action ;; last market action (stay or go to market)
-  market-prob        ;; probability of repeating last market action
 
-  payoff             ;; how much payoff agent has
+  ;; Henrich/Boyd parameters
+  p0-agent           ;; True if agent has P-variant at stage 0
+  p1-agent           ;; True if agent has P-variant at stage 1
+  last-action        ;; Last action that the agent did
+
+  last-payoff        ;; how much payoff agent has at the start of a tick
+  payoff             ;; how much payoff agent currently has
   encountered-agents ;; list of agents that the agent has encountered so far
 ]
 
@@ -32,8 +52,17 @@ to setup
   clear-all
   ;; create patches where groups are located
   set neighborhoods patches with [neighborhood?]
-  determine-market
   set-default-shape turtles "person"
+
+  set p0 0.5
+  set p1 0.5
+  set group-benefit 20
+  set coop-cost 2
+  ;set punishee-cost 1
+  ;set punisher-cost 0.5 ;cost rules ascending order: punisher -> punishee -> coop -> group
+  set error-rate 0.01
+  set alpha 0.2
+
   create-turtles number-of-people [
     ;; set size of agent
     set size 3
@@ -42,18 +71,20 @@ to setup
     ifelse (ethnicity = "American") [
       set color red
       set mobility-rate 0.8
+      set punishee-cost 0.5
+      set punisher-cost 0.2
     ] [
       set color blue
       set mobility-rate 0.3
+      set punishee-cost 1
+      set punisher-cost 0.5
     ]
 
     ;; -- learning parameters --
     set last-play-action one-of ["play" "exit"]
     set last-strategy one-of ["cooperate" "defect"]
-    set last-market-action one-of ["stay" "market"]
     set play-prob random-float 1.0
     set strategy-prob random-float 1.0
-    set market-prob random-float 1.0
     ;; -------------------------
 
     ;; assign each agent to a group
@@ -69,19 +100,107 @@ to setup
   ]
 
   set payoff-exit 0
+  determine-p-variants
 
   ;; interactions numbers
   set number-interactions 0.00000001
+  set interactions-newcomer 0.00000001
   set interactions-exit 0
   set interactions-full-coop 0
+  set interactions-full-coop-newcomer 0
+  set interactions-punish 0
 
   ;; count amount of agents in one group
   update-labels
   ask turtles [
     spread-out-vertically
-    spread-out-market
   ]
   reset-ticks
+end
+
+to determine-p-variants
+  ;; p0
+  let p0-length floor(number-of-people * p0)
+  let all-p0-list shuffle([who] of turtles)
+  let p0-list sublist all-p0-list 0 p0-length
+  let np0-list sublist all-p0-list p0-length number-of-people
+
+  foreach p0-list [ x -> ask turtle x [ set p0-agent true ] ]
+  foreach np0-list [ x -> ask turtle x [ set p0-agent false ] ]
+
+  ;; p1
+  let p1-length floor(number-of-people * p1)
+  let all-p1-list shuffle([who] of turtles)
+  let p1-list sublist all-p1-list 0 p1-length
+  let np1-list sublist all-p1-list p1-length number-of-people
+
+  foreach p1-list [ x -> ask turtle x [ set p1-agent true ] ]
+  foreach np1-list [ x -> ask turtle x [ set p1-agent false ] ]
+end
+
+to update-p-variants
+  ;;------ Stage 0 ------
+  ;; -> Determine change in p0
+  ;; change_p0 = p0 * (1 - p0) * [(1 - alpha) * beta * (b_p0 - b_np0) + alpha (2 * p0 - 1)]
+  ;; b_p0 - b_np0 = (1 - e) * (N * p1 * (1 - e) * \rho - C)
+
+  let div-group-size floor ( number-of-people / (number-of-groups) )
+  ;; |-> Since group sizes vary, the group size that is used is the one where
+  ;;     everyone evenly distributes among the groups
+  let nerr 1 - error-rate
+
+  let payoff-diff nerr * ( div-group-size * p1 * nerr * punishee-cost - coop-cost)
+  let normal-payoff-diff payoff-diff / abs( payoff-diff )
+  let payoff-transmission (1 - alpha) * normal-payoff-diff
+  let conformist-transmission alpha * (2 * p0 - 1)
+  let change-p0 p0 * (1 - p0) * (payoff-transmission + conformist-transmission)
+
+  ;; -> Change P-variants according to the new p0
+  let p0-length floor(number-of-people * p0)
+  let new-p0-length floor(number-of-people * (p0 + change-p0))
+  let length-diff new-p0-length - p0-length
+
+  if length-diff > 0 [
+    let np-agents [who] of turtles with [p0-agent = false]
+    let changed-np-agents n-of length-diff np-agents
+    foreach changed-np-agents [ x -> ask turtle x [ set p0-agent true ] ]
+  ]
+  if length-diff < 0 [
+    let p-agents [who] of turtles with [p0-agent = true]
+    let changed-p-agents n-of abs(length-diff) p-agents
+    foreach changed-p-agents [ x -> ask turtle x [ set p0-agent false ] ]
+  ]
+
+  ;;------ Stage 1 ------
+  ;; -> Determine change in p1
+  ;; change_p1 = p1 * (1 - p1) * [(1 - alpha) * beta * (b_p1 - b_np1) + alpha (2 * p1 - 1)]
+  ;; b_p1 - b_np1 = - N * (1 - e) * \phi * (1 - (1 - e) * p0)
+
+  set payoff-diff -1 * div-group-size * nerr * punisher-cost * (1 - nerr * p0)
+  set normal-payoff-diff payoff-diff / abs( payoff-diff )
+  set payoff-transmission (1 - alpha) * normal-payoff-diff
+  set conformist-transmission alpha * (2 * p1 - 1)
+  let change-p1 p1 * (1 - p1) * (payoff-transmission + conformist-transmission)
+
+  ;; -> Change P-variants according to the new p1
+  let p1-length floor(number-of-people * p1)
+  let new-p1-length floor(number-of-people * (p1 + change-p1))
+  set length-diff new-p1-length - p1-length
+
+  if length-diff > 0 [
+    let np-agents [who] of turtles with [p1-agent = false]
+    let changed-np-agents n-of length-diff np-agents
+    foreach changed-np-agents [ x -> ask turtle x [ set p1-agent true ] ]
+  ]
+  if length-diff < 0 [
+    let p-agents [who] of turtles with [p1-agent = true]
+    let changed-p-agents n-of abs(length-diff) p-agents
+    foreach changed-p-agents [ x -> ask turtle x [ set p1-agent false ] ]
+  ]
+
+  ;;----- Update p0 and p1 ------
+  set p0 p0 + change-p0
+  set p1 p1 + change-p1
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -89,6 +208,8 @@ end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to go
+  ;; remember current payoff
+  ask turtles [ set last-payoff payoff ]
   ;; reset the color of potential partners back to default
   ask turtles [reset-color]
   ;; let all agent move to their sites
@@ -97,13 +218,23 @@ to go
   decide-action
   ;; count amount of agents in one group
   update-labels
+  ;; Henrich/Boyd: update P-variants
+  if model = "Henrich/Boyd" [
+    update-p-variants
+  ]
 
   ;; assign correct group to agent label and spread agents out
   ask turtles [
     set my-neighborhood patch-here
     spread-out-vertically
-    spread-out-market
   ]
+
+  ;; track the current average payoff
+  set avg-payoff 0
+  ask turtles [
+    set avg-payoff avg-payoff + (payoff - last-payoff)
+  ]
+  set avg-payoff avg-payoff / (count turtles)
 
   tick
 end
@@ -115,25 +246,22 @@ end
 ;; decice whether agent should change neighborhood or stay in neighborhood
 ;; based on mobility rate
 to decide-action
-  ;; first, check who wants to change neighborhoods
+  ;; firstly, everybody is not a newcomer anymore
+  ;; in their respective neighborhood
+  ask turtles [ set newcomer? false ]
+  ;; secondly, check who wants to change neighborhoods
   ask turtles [
     if (random-float 1.0) < mobility-rate [
       change-neighborhood
     ]
   ]
-  ;; secondly, check who wants to go to the global market
-  ask turtles with [not newcomer?] [
-    determine-go-to-market
-  ]
-  ;; then, after everyone has moved let everyone
+  ;; finally, after everyone has moved let everyone
   ;; who didn't change neighborhoods start interactions
-  ask turtles with [not newcomer?] [
+  ifelse model = "Macy/Sato" [
     stay-in-neighborhood
+  ] [
+    stay-in-neighborhood-with-punishing
   ]
-  ;; finally, everybody is not a newcomer anymore
-  ;; in their respective neighborhood
-  ask turtles [ set newcomer? false ]
-  clear-links
 end
 
 ;; agent should change neighborhood it's currently in
@@ -141,22 +269,27 @@ to change-neighborhood
   display
   move-to one-of neighborhoods
   set newcomer? true
-  if patch-here != my-neighborhood and patch-here != market [ stop ]
+  if patch-here != my-neighborhood [ stop ]
   change-neighborhood
 end
 
+;;----------------- Macy & Sato ---------------------
+
 ;; if agent stays in same neighborhood, try to partner up
 to stay-in-neighborhood
-  ;; pick a potential partner
-  let potential-partner one-of other turtles-here
-  ;; check whether there are partners left
-  if potential-partner != nobody [
-    ;; link with partner
-    create-link-with potential-partner
-    ask potential-partner [ set color green ]
-    ;; perform interaction
-    interact-with-partner
+  ask turtles with [not newcomer?] [
+    ;; pick a potential partner
+    let potential-partner one-of other turtles-here
+    ;; check whether there are partners left
+    if potential-partner != nobody [
+      ;; link with partner
+      create-link-with potential-partner
+      ask potential-partner [ set color green ]
+      ;; perform interaction
+      interact-with-partner
+    ]
   ]
+  clear-links
 end
 
 ;; agent interacts with its partner
@@ -164,6 +297,9 @@ to interact-with-partner
     let partner one-of link-neighbors
     if partner != nobody [
       set number-interactions number-interactions + 1
+      if newcomer? = true or [newcomer?] of partner = true [
+        set interactions-newcomer interactions-newcomer + 1
+      ]
 
       ;; update encountered agent list of both agents
       let my-id who
@@ -179,36 +315,6 @@ to interact-with-partner
       ;; determine which strategy the agent and its partner use for the prisoner's dilemma
       determine-strategy partner
     ]
-end
-
-to determine-go-to-market
-  ;; ---- LOCATION: STAY OR GO TO MARKET ----
-  ;; Check whether the agent wants to repeat its last action (stay or go to market)
-  let market-action ""
-  ifelse (random-float 1.0) < market-prob [
-    ;; Yes -> repeat last action
-    set market-action last-market-action
-  ] [
-    ;; No -> choose the other action
-    if last-market-action = "stay" [ set market-action "market" ]
-    if last-market-action = "market" [ set market-action "stay" ]
-    set last-market-action market-action
-  ]
-
-  ;; Check for 50% chance of using the same decision as the role model
-  ;; (agent in the neighborhood with highest cumulative payoff)
-  let role-model max-one-of turtles-here [payoff]
-  if who != [who] of role-model and (random-float 1.0) >= 0.5 [
-    set market-action [last-market-action] of role-model
-    set last-market-action [last-market-action] of role-model
-  ]
-
-  ;; If the agent wants to go to the market, go to the market
-  if market-action = "market" [
-    display
-    move-to market
-    set newcomer? true
-  ]
 end
 
 to determine-play-or-exit [ partner ]
@@ -315,6 +421,14 @@ to determine-strategy [ partner ]
     ask partner [ set last-strategy [last-strategy] of role-model ]
   ]
 
+  ;; Update the interaction counters
+  if strategy = "cooperate" and partner-strategy = "cooperate" [
+    set interactions-full-coop interactions-full-coop + 1
+    if newcomer? = true or [newcomer?] of partner = true [
+      set interactions-full-coop-newcomer interactions-full-coop-newcomer + 1
+    ]
+  ]
+
   ;; calculate the payoffs based on the strategies of the agent and its partner
   ;; and the current opportunity cost
   let opportunity-cost 1 - ((count turtles-here - 1) / (count turtles - 1))
@@ -346,11 +460,107 @@ to update-coop-prob [ new-payoff ]
   ]
 end
 
-to update-market-prob [ new-payoff ]
-  ifelse new-payoff >= 0 [
-    set market-prob market-prob + (1 - market-prob) * new-payoff
-  ] [
-    set market-prob market-prob + market-prob * new-payoff
+;;---------------- Henrich & Boyd -------------------
+
+;; if agent stays in same neighborhood, try to partner up
+to stay-in-neighborhood-with-punishing
+  set number-interactions number-interactions + 1
+  ;; ------ Stage 0 ------
+  ask turtles with [not newcomer?] [
+    ;; pick a potential partner
+    let potential-partner one-of other turtles-here
+    ;; check whether there are partners left
+    if potential-partner != nobody [
+      ;; link with partner
+      create-link-with potential-partner
+      ask potential-partner [ set color green ]
+      ;; perform interaction
+      interact-p0
+    ]
+  ]
+  clear-links
+  ;; ------ Stage 1 ------
+  ask turtles with [not newcomer? and p1-agent = true] [
+    ;; determine defectors
+    let defectors turtles-here with [last-action = "defect"]
+    ;; pick a potential punishee
+    let potential-punishee one-of other defectors
+    ;; check whether there are punishee left
+    if potential-punishee != nobody [
+      ;; link with punishee
+      create-link-with potential-punishee
+      ask potential-punishee [ set color green ]
+      ;; perform punishment
+      punish-p1
+    ]
+  ]
+  clear-links
+end
+
+;; agent interacts with its partner
+to interact-p0
+    let partner one-of link-neighbors
+    if partner != nobody [
+      set number-interactions number-interactions + 1
+      if newcomer? = true or [newcomer?] of partner = true [
+        set interactions-newcomer interactions-newcomer + 1
+      ]
+
+      ;; Determine which strategy the agent and its partner
+      ifelse p0-agent = true [
+        set last-action "cooperate"
+        if (random-float 1.0) < error-rate [
+          set last-action "defect"
+        ]
+      ] [
+        set last-action "defect"
+      ]
+
+      ifelse [p0-agent] of partner = true [
+        ask partner [ set last-action "cooperate" ]
+        if (random-float 1.0) < error-rate [
+          ask partner [ set last-action "defect" ]
+        ]
+      ] [
+        ask partner [ set last-action "defect" ]
+      ]
+
+      if last-action = "cooperate" and [last-action] of partner = "cooperate" [
+        set interactions-full-coop interactions-full-coop + 1
+        if newcomer? = true or [newcomer?] of partner = true [
+          set interactions-full-coop-newcomer interactions-full-coop-newcomer + 1
+        ]
+      ]
+
+      ;; Calculate payoffs
+      let my-payoff group-benefit / (count turtles-here)
+      let partner-payoff group-benefit / (count turtles-here)
+      if last-action = "cooperate" [ set my-payoff my-payoff - coop-cost ]
+      if [last-action] of partner = "cooperate" [ set partner-payoff partner-payoff - coop-cost ]
+
+      ;; Update payoffs
+      set payoff payoff + my-payoff
+      ask partner [ set payoff payoff + partner-payoff ]
+    ]
+end
+
+;; agent punishes a defector
+to punish-p1
+  let punishee one-of link-neighbors
+  if punishee != nobody [
+    ;; Determine whether the punisher does indeed punish
+    set last-action "punish"
+    if (random-float 1.0) < error-rate [
+      set last-action "not-punish"
+    ]
+
+    ;; Update payoffs if punishment happens
+    if last-action = "punish" [
+      set payoff payoff - punisher-cost
+      ask punishee [ set payoff payoff - punishee-cost ]
+
+      set interactions-punish interactions-punish + 1
+    ]
   ]
 end
 
@@ -362,7 +572,6 @@ end
 to-report calculate-payoff [my-choice partner-choice opportunity-cost]
   if my-choice = "cooperate" and partner-choice = "cooperate" [
     ;; both cooperating (R)
-    set interactions-full-coop interactions-full-coop + 1
     report 0.7 - 0.5 * opportunity-cost
   ]
   if my-choice = "defect" and partner-choice = "defect" [
@@ -394,8 +603,6 @@ to-report neighborhood?  ;; patch procedure
   let top-y max-pycor - floor (world-height / 4)
   let group-interval floor (world-width / number-of-groups)
   report
-    ;; global market is seen as a neighborhood
-    ((pxcor = middle-x) and (pycor = top-y)) or
     ;; groups are located on y-axis 0
     ((pycor = 0) and
     ;; x-coordination is less than 0
@@ -405,32 +612,8 @@ to-report neighborhood?  ;; patch procedure
     (floor ((- pxcor) / group-interval) < number-of-groups))
 end
 
-to determine-market
-  let middle-x min-pxcor + floor (world-width / 2)
-  let top-y max-pycor - floor (world-height / 4)
-  set market patch middle-x top-y
-end
-
-to spread-out-market
-  ;; check whether the agent is in the market
-  if (pycor != [pycor] of market) [ stop ]
-  ;;
-  let market-number [plabel] of market
-  ;; leave a gap
-  set heading 180
-  fd 4
-  ;; determine the starting point
-  let start floor (world-width / 2) - floor(market-number / 3)
-  set xcor start
-  set heading 90
-  while [any? other turtles-here] [
-    fd 1
-  ]
-end
-
 ;; spread agents out vertically (Based on Party code)
 to spread-out-vertically  ;; turtle procedure
-  if (pycor = [pycor] of market) [ stop ]
   set heading 180
   fd 4                   ;; leave a gap
   while [any? other turtles-here] [
@@ -460,10 +643,10 @@ end
 ; See Info tab for full copyright and license.
 @#$#@#$#@
 GRAPHICS-WINDOW
-370
-20
-738
-517
+430
+10
+798
+507
 -1
 -1
 4.4
@@ -614,10 +797,10 @@ PENS
 "default" 1.0 0 -2674135 true "" "plot interactions-full-coop / number-interactions"
 
 MONITOR
-230
-250
-322
-295
+815
+165
+907
+210
 avg play prob
 mean [play-prob] of turtles
 5
@@ -625,10 +808,10 @@ mean [play-prob] of turtles
 11
 
 MONITOR
-230
-315
-327
-360
+815
+220
+912
+265
 avg strat. prob
 mean [strategy-prob] of turtles
 5
@@ -636,21 +819,10 @@ mean [strategy-prob] of turtles
 11
 
 MONITOR
-230
-385
-337
-430
-avg market prob
-mean [market-prob] of turtles
-5
-1
-11
-
-MONITOR
-230
-140
-332
-185
+810
+55
+912
+100
 number of exits
 interactions-exit
 17
@@ -658,13 +830,136 @@ interactions-exit
 11
 
 MONITOR
-215
-195
-365
-240
+810
+110
+960
+155
 nr. of full coop interactions
 interactions-full-coop
 17
+1
+11
+
+CHOOSER
+165
+90
+303
+135
+model
+model
+"Macy/Sato" "Henrich/Boyd"
+0
+
+MONITOR
+815
+275
+927
+320
+p-variants stage 0
+count turtles with [p0-agent = true]
+17
+1
+11
+
+MONITOR
+820
+330
+932
+375
+p-variants stage 1
+count turtles with [p1-agent = true]
+17
+1
+11
+
+PLOT
+225
+305
+425
+455
+newcomer interact. vs full coop
+ticks
+full coop ratio
+0.0
+10.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -2674135 true "" "plot interactions-full-coop-newcomer / interactions-newcomer"
+
+MONITOR
+820
+385
+947
+430
+NIL
+interactions-full-coop
+1
+1
+11
+
+MONITOR
+815
+445
+1007
+490
+NIL
+interactions-full-coop-newcomer
+0
+1
+11
+
+MONITOR
+1035
+385
+1157
+430
+NIL
+number-interactions
+0
+1
+11
+
+MONITOR
+1035
+445
+1172
+490
+NIL
+interactions-newcomer
+0
+1
+11
+
+PLOT
+215
+150
+415
+300
+average payoff over time
+ticks
+avg. payoff
+0.0
+10.0
+-2.0
+2.0
+true
+false
+"" ""
+PENS
+"default" 1.0 0 -2674135 true "" "plot avg-payoff"
+
+MONITOR
+1035
+325
+1152
+370
+NIL
+interactions-punish
+0
 1
 11
 
