@@ -24,7 +24,7 @@ globals [
   interactions-full-coop           ;; number of interactions in which there was full cooperation
   interactions-full-coop-newcomer  ;; number of newcomer interactions in which there was full cooperation
   avg-payoff                       ;; average change in payoff
-  interactions-punish              ;; number of interactions in which an agent was punished
+  interactions-punish              ;; number of interactions
 ]
 
 turtles-own [
